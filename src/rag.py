@@ -46,11 +46,20 @@ def retrieve_relevant_chunks(vector_store, job_description, top_k=4):
     return [doc.page_content for doc in results]
 
 
+import json
+import re
+
+
 def screen_resume(vector_store, job_description, top_k=4):
     """
     Retrieves relevant resume chunks and asks Groq's LLM to screen the
-    candidate against the given job description. Returns the model's
-    screening summary as a string.
+    candidate against the given job description. Returns a dict:
+    {
+        "match_score": int,
+        "matching_skills": [str, ...],
+        "missing_skills": [str, ...],
+        "recommendation": str
+    }
     """
     relevant_chunks = retrieve_relevant_chunks(vector_store, job_description, top_k=top_k)
     context = "\n\n---\n\n".join(relevant_chunks)
@@ -67,7 +76,38 @@ def screen_resume(vector_store, job_description, top_k=4):
         temperature=0.2,
     )
 
-    return response.choices[0].message.content
+    raw_text = response.choices[0].message.content.strip()
+
+    # Strip markdown code fences if the model adds them despite instructions
+    cleaned = re.sub(r"^```(?:json)?|```$", "", raw_text, flags=re.MULTILINE).strip()
+
+    try:
+        result = json.loads(cleaned)
+        result.setdefault("candidate_summary", "")
+        result.setdefault("experience_level", "Unknown")
+        result.setdefault("match_score", 0)
+        result.setdefault("ats_score", 0)
+        result.setdefault("top_skills", [])
+        result.setdefault("matching_skills", [])
+        result.setdefault("missing_skills", [])
+        result.setdefault("interview_questions", [])
+        result.setdefault("hiring_decision", "Unknown")
+        result.setdefault("recommendation", "")
+        return result
+    except (json.JSONDecodeError, ValueError):
+        # Fallback: return raw text wrapped so the UI can still show something
+        return {
+            "candidate_summary": "",
+            "experience_level": None,
+            "match_score": None,
+            "ats_score": None,
+            "top_skills": [],
+            "matching_skills": [],
+            "missing_skills": [],
+            "interview_questions": [],
+            "hiring_decision": None,
+            "recommendation": raw_text,
+        }
 
 
 if __name__ == "__main__":
@@ -78,4 +118,4 @@ if __name__ == "__main__":
     vs = build_vector_store_from_file(file_path)
     result = screen_resume(vs, job_description)
 
-    print(result)
+    print(json.dumps(result, indent=2))
